@@ -37,7 +37,7 @@ The visual builder lets you design these graphs in a browser, then validate or r
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/your-org/agent-builder
+git clone https://github.com/ArgaLabs/agent-builder
 cd agent-builder
 pip install -e ".[dev]"
 
