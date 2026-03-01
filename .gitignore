@@ -1,3 +1,11 @@
+# Frontend build artifacts (Vite/React compiled output)
+frontend/dist/
+attractor/server/static/assets/
+attractor/server/static/index.html
+
+# Node modules
+frontend/node_modules/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

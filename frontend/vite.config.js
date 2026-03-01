@@ -10,9 +10,11 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/pipelines': 'http://localhost:8000',
-      '/validate': 'http://localhost:8000',
-      '/generate-dot': 'http://localhost:8000',
+      '/pipelines': { target: 'http://localhost:8000', changeOrigin: true },
+      '/validate': { target: 'http://localhost:8000', changeOrigin: true },
+      '/generate-dot': { target: 'http://localhost:8000', changeOrigin: true },
+      '/upload': { target: 'http://localhost:8000', changeOrigin: true },
+      '/schedules': { target: 'http://localhost:8000', changeOrigin: true },
     },
   },
 })

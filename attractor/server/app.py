@@ -40,19 +40,16 @@ scheduler = Scheduler(pipeline_manager=manager)
 
 async def create_pipeline(request: Request) -> JSONResponse:
     """POST /pipelines - Start a pipeline from DOT source."""
-    body = await request.json()
-    req = CreatePipelineRequest(**body)
-
     try:
+        body = await request.json()
+        req = CreatePipelineRequest(**body)
         managed = await manager.create_and_run(
             dot_source=req.dot_source,
             context_data=req.context,
         )
         return JSONResponse(managed.info().model_dump(), status_code=201)
     except ParseError as e:
-        return JSONResponse(
-            {"error": f"DOT parse error: {e}"}, status_code=400
-        )
+        return JSONResponse({"error": f"DOT parse error: {e}"}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -216,49 +213,64 @@ async def get_context(request: Request) -> JSONResponse:
     return JSONResponse(safe)
 
 
+async def get_pipeline_log(request: Request) -> JSONResponse:
+    """GET /pipelines/{id}/log - Full event log + context snapshot (for result panel)."""
+    pipeline_id = request.path_params["id"]
+    managed = manager.get(pipeline_id)
+    if not managed:
+        return JSONResponse({"error": "Pipeline not found"}, status_code=404)
+
+    snapshot = managed.context.snapshot()
+    safe_context = json.loads(json.dumps(snapshot, default=str))
+
+    return JSONResponse({
+        "id": pipeline_id,
+        "status": managed.status.value,
+        "nodes_completed": managed.nodes_completed,
+        "execution_order": (
+            managed.result.execution_order if managed.result else managed.nodes_completed
+        ),
+        "duration": (managed.completed_at - managed.created_at) if managed.completed_at else None,
+        "error": managed.error,
+        "context": safe_context,
+        "events": managed.events[-100:],  # last 100 events
+    })
+
+
 # --- Utility endpoints ---
 
 
 async def validate_dot(request: Request) -> JSONResponse:
     """POST /validate - Validate a DOT file."""
-    body = await request.json()
-    req = ValidateRequest(**body)
-
     try:
-        graph = parse_dot(req.dot_source)
-    except ParseError as e:
-        return JSONResponse({
-            "valid": False,
-            "diagnostics": [
-                {
-                    "rule": "parse_error",
-                    "severity": "error",
-                    "message": str(e),
-                }
-            ],
-        })
-
-    diagnostics = validate_graph(graph)
-    diag_list = [d.model_dump() for d in diagnostics]
-    has_errors = any(
-        d.severity.value == "error" for d in diagnostics
-    )
-
-    return JSONResponse({
-        "valid": not has_errors,
-        "diagnostics": diag_list,
-    })
+        body = await request.json()
+        req = ValidateRequest(**body)
+        try:
+            graph = parse_dot(req.dot_source)
+        except ParseError as e:
+            return JSONResponse({
+                "valid": False,
+                "diagnostics": [{"rule": "parse_error", "severity": "error", "message": str(e)}],
+            })
+        diagnostics = validate_graph(graph)
+        diag_list = [d.model_dump() for d in diagnostics]
+        has_errors = any(d.severity.value == "error" for d in diagnostics)
+        return JSONResponse({"valid": not has_errors, "diagnostics": diag_list})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 async def generate_dot_endpoint(request: Request) -> JSONResponse:
     """POST /generate-dot - Generate DOT from visual graph definition."""
-    body = await request.json()
-    nodes = body.get("nodes", [])
-    edges = body.get("edges", [])
-    graph_attrs = body.get("graph_attrs", {})
-
-    dot_source = generate_dot(nodes, edges, graph_attrs)
-    return JSONResponse({"dot_source": dot_source})
+    try:
+        body = await request.json()
+        nodes = body.get("nodes", [])
+        edges = body.get("edges", [])
+        graph_attrs = body.get("graph_attrs", {})
+        dot_source = generate_dot(nodes, edges, graph_attrs)
+        return JSONResponse({"dot_source": dot_source})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 async def list_pipelines(request: Request) -> JSONResponse:
@@ -340,20 +352,19 @@ async def delete_upload(request: Request) -> JSONResponse:
 
 async def create_schedule(request: Request) -> JSONResponse:
     """POST /schedules - Create a recurring pipeline schedule."""
-    body = await request.json()
     try:
+        body = await request.json()
         req = CreateScheduleRequest(**body)
+        sched = await scheduler.create(
+            dot_source=req.dot_source,
+            interval_seconds=req.interval_seconds,
+            duration_seconds=req.duration_seconds,
+            carry_context=req.carry_context,
+            initial_context=req.context,
+        )
+        return JSONResponse(sched.info(), status_code=201)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=422)
-
-    sched = await scheduler.create(
-        dot_source=req.dot_source,
-        interval_seconds=req.interval_seconds,
-        duration_seconds=req.duration_seconds,
-        carry_context=req.carry_context,
-        initial_context=req.context,
-    )
-    return JSONResponse(sched.info(), status_code=201)
 
 
 async def list_schedules(request: Request) -> JSONResponse:
@@ -468,6 +479,11 @@ def create_app() -> Starlette:
         Route(
             "/pipelines/{id}/context",
             get_context,
+            methods=["GET"],
+        ),
+        Route(
+            "/pipelines/{id}/log",
+            get_pipeline_log,
             methods=["GET"],
         ),
         Route("/validate", validate_dot, methods=["POST"]),

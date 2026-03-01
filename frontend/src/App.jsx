@@ -7,6 +7,7 @@ import DotPreview from './components/DotPreview.jsx'
 import Toast from './components/Toast.jsx'
 import ScheduleModal from './components/ScheduleModal.jsx'
 import SchedulePanel from './components/SchedulePanel.jsx'
+import PipelineOutput from './components/PipelineOutput.jsx'
 import { generateDot } from './dotGenerator.js'
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
   const [dotPreviewOpen, setDotPreviewOpen] = useState(false)
 
   const [uploadedFiles, setUploadedFiles] = useState([])
+  const [pipelineResult, setPipelineResult] = useState(null)
 
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
   const [schedulePanelOpen, setSchedulePanelOpen] = useState(false)
@@ -35,6 +37,17 @@ export default function App() {
   const showToast = useCallback((message, type = '') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
+  }, [])
+
+  // Safe response parser: try JSON first, fall back to text so we always get something useful.
+  const parseResponse = useCallback(async (r) => {
+    const text = await r.text()
+    if (!text) return { _empty: true, status: r.status }
+    try {
+      return JSON.parse(text)
+    } catch {
+      return { _raw: text, status: r.status }
+    }
   }, [])
 
   const refreshDot = useCallback((name, goal, stylesheet) => {
@@ -206,7 +219,15 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dot_source: dotSource }),
       })
-      const d = await r.json()
+      const d = await parseResponse(r)
+      if (d._empty) {
+        showToast(`Server returned empty response (HTTP ${d.status}). Is the backend running?`, 'error')
+        return
+      }
+      if (d._raw || d.error) {
+        showToast(`Server error: ${d.error || d._raw?.slice(0, 120)}`, 'error')
+        return
+      }
       if (d.valid) {
         showToast('Pipeline is valid', 'success')
       } else {
@@ -215,9 +236,9 @@ export default function App() {
         alert('Validation Issues:\n\n' + msgs)
       }
     } catch (e) {
-      showToast('Request failed: ' + e.message, 'error')
+      showToast('Network error: ' + e.message, 'error')
     }
-  }, [dotSource, showToast])
+  }, [dotSource, showToast, parseResponse])
 
   const handleRun = useCallback(async () => {
     if (!dotSource.includes('->')) {
@@ -233,30 +254,43 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const d = await r.json()
-      if (r.ok) {
-        showToast(`Pipeline started: ${d.id}`, 'success')
-        pollPipeline(d.id)
-      } else {
-        showToast(`Error: ${d.error}`, 'error')
+      const d = await parseResponse(r)
+      if (d._empty) {
+        showToast(`Server returned empty response (HTTP ${d.status}). Is the backend running?`, 'error')
+        return
       }
+      if (d._raw || d.error) {
+        showToast(`Error: ${d.error || d._raw?.slice(0, 120)}`, 'error')
+        return
+      }
+      showToast(`Pipeline started: ${d.id}`, 'success')
+      pollPipeline(d.id)
     } catch (e) {
-      showToast('Request failed: ' + e.message, 'error')
+      showToast('Network error: ' + e.message, 'error')
     }
-  }, [dotSource, showToast, buildInitialContext])
+  }, [dotSource, showToast, buildInitialContext, parseResponse])
 
   const pollPipeline = useCallback((id) => {
     const check = async () => {
       try {
         const r = await fetch(`/pipelines/${id}`)
-        const d = await r.json()
-        if (d.status === 'completed') showToast('Pipeline completed', 'success')
-        else if (d.status === 'failed') showToast(`Pipeline failed: ${d.error || ''}`, 'error')
-        else if (d.status === 'running') setTimeout(check, 1000)
+        const d = await parseResponse(r)
+        if (d.status === 'completed' || d.status === 'failed') {
+          const label = d.status === 'completed' ? 'Pipeline completed' : `Pipeline failed: ${d.error || ''}`
+          showToast(label, d.status === 'completed' ? 'success' : 'error')
+          // Fetch the full result log and show the output panel
+          try {
+            const lr = await fetch(`/pipelines/${id}/log`)
+            const log = await parseResponse(lr)
+            if (!log._empty && !log._raw) setPipelineResult(log)
+          } catch (_) {}
+        } else if (d.status === 'running') {
+          setTimeout(check, 1200)
+        }
       } catch (_) {}
     }
-    setTimeout(check, 500)
-  }, [showToast])
+    setTimeout(check, 800)
+  }, [showToast, parseResponse])
 
   // ── Schedule polling ──────────────────────────────────────────────────
   const fetchSchedules = useCallback(async () => {
@@ -303,20 +337,20 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(scheduleBody),
         })
-        const d = await r.json()
-        if (r.ok) {
-          showToast('Schedule created', 'success')
-          setScheduleModalOpen(false)
-          setSchedulePanelOpen(true)
-          await fetchSchedules()
-        } else {
-          showToast(`Error: ${d.error}`, 'error')
+        const d = await parseResponse(r)
+        if (d._empty || d._raw || d.error) {
+          showToast(`Error: ${d.error || d._raw?.slice(0, 120) || `HTTP ${d.status}`}`, 'error')
+          return
         }
+        showToast('Schedule created', 'success')
+        setScheduleModalOpen(false)
+        setSchedulePanelOpen(true)
+        await fetchSchedules()
       } catch (e) {
-        showToast('Request failed: ' + e.message, 'error')
+        showToast('Network error: ' + e.message, 'error')
       }
     },
-    [dotSource, showToast, fetchSchedules, buildInitialContext]
+    [dotSource, showToast, fetchSchedules, buildInitialContext, parseResponse]
   )
 
   const handleCancelSchedule = useCallback(
@@ -408,6 +442,13 @@ export default function App() {
       )}
 
       <Toast message={toast?.message} type={toast?.type} />
+
+      {pipelineResult && (
+        <PipelineOutput
+          result={pipelineResult}
+          onClose={() => setPipelineResult(null)}
+        />
+      )}
     </div>
   )
 }
