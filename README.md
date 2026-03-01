@@ -1,4 +1,5 @@
-# Attractor
+# Attractor implementation by Arga Labs
+An implementation of the nlspec in https://github.com/strongdm/attractor by StrongDM
 
 A DOT-based pipeline runner for multi-stage AI workflows, with a visual browser-based builder for designing pipelines without writing any code.
 
@@ -15,6 +16,8 @@ A DOT-based pipeline runner for multi-stage AI workflows, with a visual browser-
   - [Defining Conditions](#defining-conditions)
   - [Pipeline Settings](#pipeline-settings)
   - [Viewing the DOT Source](#viewing-the-dot-source)
+- [The Manager Loop](#the-manager-loop)
+- [MCP (Model Context Protocol)](#mcp-model-context-protocol)
 - [External Skills and Tool Calls](#external-skills-and-tool-calls)
 - [Example: Build, Lint, and Browser-Validate a Web App](#example-build-lint-and-browser-validate-a-web-app)
 - [Running & Validating a Pipeline](#running--validating-a-pipeline)
@@ -34,11 +37,13 @@ The visual builder lets you design these graphs in a browser, then validate or r
 
 ## Quick Start
 
-**Requirements:** Python 3.11+
+**Requirements:** Python 3.11+, Node.js 18+
+
+### Option A — Use the pre-built frontend (no Node.js needed)
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/your-org/agent-builder
+git clone https://github.com/ArgaLabs/agent-builder
 cd agent-builder
 pip install -e ".[dev]"
 
@@ -49,12 +54,35 @@ OPENAI_API_KEY=sk-proj-...
 GEMINI_API_KEY=AIza...
 EOF
 
-# 3. Start the backend server
+# 3. Start the backend server (serves the pre-built React app)
 python -m attractor.server
 
 # 4. Open the visual builder
 open http://localhost:8000
 ```
+
+### Option B — Run the frontend dev server (hot reload)
+
+```bash
+# Terminal 1 — backend
+python -m attractor.server          # http://localhost:8000
+
+# Terminal 2 — frontend (Vite dev server with proxy to backend)
+cd frontend
+npm install
+npm run dev                         # http://localhost:3000
+```
+
+The Vite dev server proxies `/pipelines`, `/validate`, and `/generate-dot` to the backend at `localhost:8000`, so you can work on the UI with instant hot reload.
+
+### Rebuilding the frontend
+
+```bash
+cd frontend
+npm run build   # outputs to attractor/server/static/
+```
+
+Commit the built files so the backend can serve the app without Node.js.
 
 The server starts on **http://localhost:8000** by default. The visual builder is served from the same origin at `/`.
 
@@ -161,6 +189,273 @@ Individual nodes can override the stylesheet model using the **LLM Model Overrid
 ### Viewing the DOT Source
 
 Click **Source** in the top bar to toggle a panel at the bottom that shows the generated DOT file in real time. Click **Copy** to copy it to the clipboard.
+
+---
+
+## The Manager Loop
+
+The **Manager Loop** (`manager_loop` handler, `hexagon` shape in DOT) is the supervisor node. Unlike a regular LLM Call that sends one prompt and moves on, the Manager runs a repeating **observe → guard → steer** cycle that lets a second agent watch and correct a first one mid-execution — without restarting from scratch.
+
+### When to use it
+
+Use a Manager Loop when you need an agent to be *watched* rather than just *run*:
+
+- An LLM generates code over many tool-call turns — a manager checks quality and injects corrections if it drifts
+- A long-running agent is prone to getting stuck in loops — a manager detects this and nudges it back on track
+- You want a "senior" model (e.g. Opus) to supervise a "junior" model (e.g. Sonnet) doing the actual work
+- You need a budget or safety guardrail that can abort a sub-task before it runs too long
+
+### The observe → guard → steer cycle
+
+Each cycle of the Manager Loop runs three hooks in sequence:
+
+```
+┌──────────────────────────────────────────────────────┐
+│  CYCLE 1..max_cycles                                  │
+│                                                       │
+│  1. observe_fn(input)  → observation                 │
+│     Inspect the pipeline context, agent output,       │
+│     tool call history, or any external state.         │
+│                                                       │
+│  2. guard_fn(input, observation)  → bool             │
+│     Return False to stop the cycle early (success).   │
+│     Return True to continue to the steer step.        │
+│                                                       │
+│  3. steer_fn(input, observation)                     │
+│     Inject a steering message into the agent session. │
+│     session.steer("Please focus on X, not Y.")       │
+└──────────────────────────────────────────────────────┘
+```
+
+After `max_cycles` the node always exits with `SUCCESS` and writes `manager.cycles` to context. The guard can exit early at any cycle.
+
+### In the visual builder
+
+Select a **Manager Loop** node and set:
+
+| Field | Effect |
+|---|---|
+| **Prompt** | The initial instruction sent to the managed agent at the start of the cycle. Supports `$goal` and `${key}` interpolation. |
+| **Max Cycles** | How many observe/guard/steer passes to run before exiting. Default: 3. The guard hook can exit early at any cycle. |
+| **LLM Model Override** | The model used for this supervisor node's own LLM calls. |
+
+The observe/guard/steer logic itself requires Python hooks (see below).
+
+### In Python — wiring the hooks
+
+```python
+from attractor.pipeline.handlers.base import HandlerInput
+from attractor.pipeline.handlers.manager import ManagerLoopHandler
+from attractor.pipeline.engine import create_default_registry, run
+
+async def observe(input: HandlerInput):
+    """Read whatever state you care about."""
+    last_response = input.context.get("last_response", "")
+    cycles_done = input.context.get("manager.cycles", 0)
+    return {"last_response": last_response, "cycles": cycles_done}
+
+async def guard(input: HandlerInput, obs) -> bool:
+    """Return False to stop the loop early (task done), True to keep going."""
+    response = obs["last_response"]
+    # Stop as soon as the agent says it's finished
+    if "DONE" in response or "complete" in response.lower():
+        return False
+    # Also stop if the response looks reasonable (>200 chars of actual content)
+    if len(response) > 200:
+        return False
+    return True  # keep cycling
+
+async def steer(input: HandlerInput, obs) -> None:
+    """Inject a correction into the running agent session."""
+    # input.extra["session"] is set when the pipeline is wired to a Session
+    session = input.extra.get("session")
+    if session:
+        session.steer(
+            "Your last response was too short. Please provide a complete, "
+            "detailed answer and end with the word DONE."
+        )
+
+# Register the custom manager
+registry = create_default_registry(backend=my_backend)
+registry.register(
+    "manager_loop",
+    ManagerLoopHandler(observe_fn=observe, guard_fn=guard, steer_fn=steer),
+)
+
+result = await run(graph, registry=registry)
+print(f"Manager ran {result.final_context.get('manager.cycles')} cycles")
+```
+
+### Session steering
+
+Steering injects a `[STEERING]` message into the active agent's conversation mid-turn. The agent sees it as a user message and adjusts without losing its conversation history or tool call context:
+
+```python
+session.steer("Focus on test coverage, not implementation.")
+session.steer("The file path is wrong — use /workspace/src, not /src.")
+```
+
+This is more efficient than a retry (which discards everything) and more targeted than a follow-up (which starts a new turn).
+
+### Supervisor pattern — Opus watches Sonnet
+
+A common production pattern: use a cheap fast model for the work and an expensive capable model as the supervisor.
+
+```dot
+digraph SupervisedPipeline {
+    graph [goal="Write and validate a REST API handler",
+           model_stylesheet="* { llm_model: claude-sonnet-4-5; }
+                             #supervisor { llm_model: claude-opus-4-6; }"]
+
+    start      [shape=Mdiamond]
+    supervisor [shape=hexagon,
+                prompt="Supervise the agent below. After each response, check if the
+                        task is complete and the code is correct. If not, steer it.",
+                max_cycles="5"]
+    exit       [shape=Msquare]
+
+    start -> supervisor -> exit
+}
+```
+
+### How Manager Loop differs from LLM Call and Parallel Fork
+
+| Node | What it does |
+|---|---|
+| **LLM Call** | Single prompt → single response → move on |
+| **Manager Loop** | Repeated observe/guard/steer cycle; can correct a running agent |
+| **Parallel Fork** | Fans out to multiple branches running concurrently |
+
+The Manager Loop is the only node that can *modify an in-progress agent session*. LLM Call and Tool nodes run and exit; Manager Loop stays in the driver's seat for multiple passes.
+
+### Context keys written by Manager Loop
+
+| Key | Value |
+|---|---|
+| `manager.cycles` | Number of cycles completed before exit |
+
+---
+
+## MCP (Model Context Protocol)
+
+Attractor has first-class support for [MCP](https://modelcontextprotocol.io) — the open standard for connecting LLMs to external tool servers. Any MCP-compatible server (filesystem, GitHub, Slack, Playwright, your own custom server, etc.) can be wired into an LLM Call node so the model can invoke those tools mid-pipeline.
+
+### How it works
+
+The MCP client connects to a server, calls `tools/list` to discover available tools, then wraps each one as an Attractor `Tool` object. Those tools are passed alongside the prompt when the LLM is invoked — the model decides which tools to call, the client executes them, and the results flow back into the conversation automatically.
+
+### In the visual builder
+
+On any **LLM Call** or **Manager Loop** node, the **MCP Servers** field accepts one server per line:
+
+```
+# stdio — the full launch command for a local server
+npx -y @modelcontextprotocol/server-filesystem /workspace
+npx -y @modelcontextprotocol/server-github
+
+# HTTP — the base URL of a remote server
+http://localhost:3001
+https://my-mcp-skill.internal
+```
+
+The engine connects to each listed server at pipeline start and makes their tools available to the LLM at that node.
+
+### In Python — pipeline
+
+```python
+from attractor.mcp import MCPSession
+from attractor.pipeline.engine import create_default_registry, run
+
+async with MCPSession() as mcp:
+    # Attach a local filesystem server
+    await mcp.add_stdio(
+        label="filesystem",
+        cmd="npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace",
+    )
+    # Attach a remote browser-automation skill server
+    await mcp.add_http(label="browser", base_url="http://localhost:3001")
+
+    registry = create_default_registry(backend=my_backend, mcp_session=mcp)
+    result = await run(graph, registry=registry)
+    # Every LLM Call node in the pipeline now has access to filesystem + browser tools
+```
+
+### In Python — generate() directly
+
+```python
+from attractor.mcp import MCPClient, load_mcp_tools
+from attractor.llm.generate import generate
+
+async with MCPClient.stdio("npx", "-y", "@modelcontextprotocol/server-filesystem", "/ws") as client:
+    tools = await load_mcp_tools(client)
+    result = await generate(
+        model="claude-sonnet-4-5",
+        prompt="List the files in /ws and summarise what this project does.",
+        tools=tools,
+        max_tool_rounds=5,
+    )
+    print(result.text)
+```
+
+### In Python — agent session
+
+```python
+from attractor.mcp import MCPClient
+from attractor.agent.tools.registry import ToolRegistry
+
+registry = ToolRegistry()
+
+async with MCPClient.stdio("npx", "-y", "@modelcontextprotocol/server-github") as client:
+    names = await registry.mcp_connect(client)
+    print(f"Registered MCP tools: {names}")
+    # ['create_issue', 'list_prs', 'get_file_contents', ...]
+```
+
+### Popular MCP servers
+
+| Server | Install | What it gives the LLM |
+|---|---|---|
+| Filesystem | `npx -y @modelcontextprotocol/server-filesystem <dir>` | Read/write local files |
+| GitHub | `npx -y @modelcontextprotocol/server-github` | Issues, PRs, file content |
+| Playwright | `npx -y @modelcontextprotocol/server-playwright` | Browser automation |
+| Slack | `npx -y @modelcontextprotocol/server-slack` | Post messages, read channels |
+| Fetch | `npx -y @modelcontextprotocol/server-fetch` | Fetch any URL |
+| PostgreSQL | `npx -y @modelcontextprotocol/server-postgres <conn>` | Query a database |
+| Custom | Any HTTP server implementing `POST /mcp` (JSON-RPC 2.0) | Whatever you expose |
+
+### Writing a custom MCP server
+
+Any HTTP server that accepts `POST /mcp` with JSON-RPC 2.0 payloads and responds to `initialize`, `tools/list`, and `tools/call` is a valid MCP server. A minimal FastAPI example:
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+TOOLS = [{
+    "name": "validate_page",
+    "description": "Load a URL in a headless browser and check for errors.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {"url": {"type": "string"}},
+        "required": ["url"],
+    },
+}]
+
+@app.post("/mcp")
+async def mcp(req: dict):
+    method = req.get("method")
+    rid = req.get("id")
+    if method == "initialize":
+        return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2024-11-05", "capabilities": {}}}
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}}
+    if method == "tools/call":
+        url = req["params"]["arguments"]["url"]
+        # ... run headless browser ...
+        return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": "No errors found"}]}}
+```
 
 ---
 

@@ -5,20 +5,35 @@ from __future__ import annotations
 import abc
 import json
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from attractor.pipeline.handlers.base import Handler, HandlerInput
 from attractor.pipeline.outcome import Outcome, StageStatus
 
+if TYPE_CHECKING:
+    from attractor.llm.tools import Tool
+    from attractor.mcp.bridge import MCPSession
+
 
 class CodergenBackend(abc.ABC):
     @abc.abstractmethod
-    async def run(self, node_id: str, prompt: str, context: dict[str, Any]) -> Outcome | str: ...
+    async def run(
+        self,
+        node_id: str,
+        prompt: str,
+        context: dict[str, Any],
+        tools: "list[Tool] | None" = None,
+    ) -> "Outcome | str": ...
 
 
 class CodergenHandler(Handler):
-    def __init__(self, backend: CodergenBackend | None = None):
+    def __init__(
+        self,
+        backend: "CodergenBackend | None" = None,
+        mcp_session: "MCPSession | None" = None,
+    ):
         self._backend = backend
+        self._mcp_session = mcp_session
 
     async def execute(self, input: HandlerInput) -> Outcome:
         prompt = input.node.prompt
@@ -36,6 +51,17 @@ class CodergenHandler(Handler):
             with open(os.path.join(input.stage_dir, "prompt.md"), "w") as f:
                 f.write(prompt)
 
+        # Collect MCP tools for this node if a session is attached
+        tools = None
+        if self._mcp_session is not None:
+            try:
+                tools = await self._mcp_session.all_tools()
+            except Exception as exc:
+                return Outcome(
+                    status=StageStatus.FAIL,
+                    message=f"MCP tool discovery failed: {exc}",
+                )
+
         if self._backend is None:
             response_text = f"[Simulated response for node {input.node.id}]"
             outcome = Outcome(
@@ -44,7 +70,7 @@ class CodergenHandler(Handler):
                 context_updates={"last_response": response_text},
             )
         else:
-            result = await self._backend.run(input.node.id, prompt, input.context.snapshot())
+            result = await self._backend.run(input.node.id, prompt, input.context.snapshot(), tools=tools)
             if isinstance(result, Outcome):
                 outcome = result
             else:

@@ -9,7 +9,7 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from attractor.pipeline.parser import ParseError, parse_dot
@@ -269,6 +269,40 @@ async def visual_builder(request: Request) -> HTMLResponse:
     return HTMLResponse(content)
 
 
+MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".css": "text/css",
+    ".js": "application/javascript",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".json": "application/json",
+}
+
+
+async def serve_static(request: Request) -> Response:
+    """Serve static assets from the static directory (including Vite build output)."""
+    # Support both /{filename} and /assets/{filename} via path param
+    path_val: str = request.path_params.get("path", "") or request.path_params.get("filename", "")
+    file_path = (STATIC_DIR / path_val).resolve()
+
+    # Security: prevent path traversal outside STATIC_DIR
+    try:
+        file_path.relative_to(STATIC_DIR.resolve())
+    except ValueError:
+        return Response("Forbidden", status_code=403)
+
+    if not file_path.exists() or not file_path.is_file():
+        return Response("Not found", status_code=404)
+
+    mime = MIME_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
+    return FileResponse(str(file_path), media_type=mime)
+
+
 # --- App factory ---
 
 
@@ -315,6 +349,8 @@ def create_app() -> Starlette:
         ),
         Route("/validate", validate_dot, methods=["POST"]),
         Route("/generate-dot", generate_dot_endpoint, methods=["POST"]),
+        # Catch-all for Vite build static assets (e.g. /assets/index-*.js)
+        Route("/{path:path}", serve_static, methods=["GET"]),
     ]
 
     app = Starlette(routes=routes)

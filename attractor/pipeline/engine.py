@@ -32,8 +32,9 @@ def create_default_registry(**kwargs: Any) -> HandlerRegistry:
     registry.register("point", StartHandler())
     registry.register("exit", ExitHandler())
     registry.register("doublecircle", ExitHandler())
-    registry.register("codergen", CodergenHandler(backend=kwargs.get("backend")))
-    registry.register("box", CodergenHandler(backend=kwargs.get("backend")))
+    _codergen = CodergenHandler(backend=kwargs.get("backend"), mcp_session=kwargs.get("mcp_session"))
+    registry.register("codergen", _codergen)
+    registry.register("box", _codergen)
     registry.register(
         "wait.human",
         WaitForHumanHandler(
