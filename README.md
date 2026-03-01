@@ -1,4 +1,4 @@
-# Attractor Agent Builder
+# Attractor
 
 A DOT-based pipeline runner for multi-stage AI workflows, with a visual browser-based builder for designing pipelines without writing any code.
 
@@ -15,7 +15,8 @@ A DOT-based pipeline runner for multi-stage AI workflows, with a visual browser-
   - [Defining Conditions](#defining-conditions)
   - [Pipeline Settings](#pipeline-settings)
   - [Viewing the DOT Source](#viewing-the-dot-source)
-- [Example: Code Review Pipeline](#example-code-review-pipeline)
+- [External Skills and Tool Calls](#external-skills-and-tool-calls)
+- [Example: Build, Lint, and Browser-Validate a Web App](#example-build-lint-and-browser-validate-a-web-app)
 - [Running & Validating a Pipeline](#running--validating-a-pipeline)
 - [API Reference](#api-reference)
 - [Environment Variables](#environment-variables)
@@ -25,7 +26,7 @@ A DOT-based pipeline runner for multi-stage AI workflows, with a visual browser-
 
 ## Overview
 
-Attractor pipelines are directed graphs described in [Graphviz DOT syntax](https://graphviz.org/doc/info/lang.html). Each node in the graph is a **stage** — an LLM call, a shell command, a human approval step, or a branching point. Edges between nodes carry optional **conditions** that determine which path the engine takes at runtime.
+Attractor pipelines are directed graphs described in [Graphviz DOT syntax](https://graphviz.org/doc/info/lang.html). Each node in the graph is a **stage** — an LLM call, a shell command, an HTTP request to an external skill, a human approval step, or a branching point. Edges carry optional **conditions** that determine which path the engine takes at runtime.
 
 The visual builder lets you design these graphs in a browser, then validate or run them against the HTTP API backend.
 
@@ -37,12 +38,16 @@ The visual builder lets you design these graphs in a browser, then validate or r
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/ArgaLabs/agent-builder
+git clone https://github.com/your-org/agent-builder
 cd agent-builder
 pip install -e ".[dev]"
 
-# 2. Create a .env file with your API keys
-cp .env.example .env   # or create it manually — see below
+# 2. Add your API keys
+cat > .env << 'EOF'
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...
+GEMINI_API_KEY=AIza...
+EOF
 
 # 3. Start the backend server
 python -m attractor.server
@@ -52,18 +57,6 @@ open http://localhost:8000
 ```
 
 The server starts on **http://localhost:8000** by default. The visual builder is served from the same origin at `/`.
-
-### .env file
-
-Create a `.env` file in the project root:
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-proj-...
-GEMINI_API_KEY=AIza...
-```
-
-You only need keys for the providers you plan to use.
 
 ---
 
@@ -79,7 +72,7 @@ The builder is a single-page app at `http://localhost:8000`. It has three panels
 
 ### Adding Nodes
 
-Click any node type in the left panel to add it to the canvas. The node appears near the centre — drag it to reposition. You can add multiple nodes of the same type (except **Start** and **Exit**, which are singletons).
+Click any node type in the left panel to add it to the canvas. The node appears near the center — drag it to reposition. You can add multiple nodes of the same type (except **Start** and **Exit**, which are singletons).
 
 ### Connecting Nodes
 
@@ -95,16 +88,17 @@ Each arrow is an **edge**. Click any edge on the canvas to open its properties i
 | Node | Purpose |
 |---|---|
 | **Start** | Entry point — every pipeline must have exactly one. |
-| **LLM Call** | Sends a prompt to a language model and stores the response in the pipeline context. |
+| **LLM Call** | Sends a prompt to a language model and stores the response in pipeline context. |
 | **Conditional** | Routing node — evaluates conditions on outgoing edges and follows the first match. |
 | **Human Gate** | Pauses execution and waits for a human to approve or reject before continuing. |
 | **Tool / Shell** | Runs a shell command and captures stdout/stderr into the pipeline context. |
+| **HTTP Request** | Calls an external URL (GET/POST/PUT/etc.). Use for webhooks, browser APIs, or any external skill. |
 | **Parallel Fork** | Fans out — launches multiple branches concurrently. |
 | **Fan-In Join** | Collects results from all parallel branches before continuing. |
 | **Manager Loop** | Supervisor node — observes a sub-pipeline and can steer or abort it. |
 | **Exit** | Terminal node — every pipeline must have exactly one. |
 
-Click a node on the canvas to edit its properties in the right panel. Fields vary by node type — for example, **LLM Call** and **Manager Loop** show a **Prompt** field, and **Tool / Shell** shows a **Command** field.
+Click a node on the canvas to edit its properties in the right panel. Fields vary by node type.
 
 ---
 
@@ -127,20 +121,13 @@ A **Conditional** node is just a routing point. The logic lives on the arrows le
 |---|---|
 | `outcome=success` | The previous node's outcome equals `success` |
 | `outcome=failure` | The previous node's outcome equals `failure` |
-| `status=done` | A context key `status` equals `done` |
+| `http.status_code=200` | An HTTP node returned status 200 |
+| `tool.exit_code=0` | A shell command exited cleanly |
 | `key!=value` | Not-equals check |
 | `a=1 && b=2` | Both conditions must be true (AND) |
 | *(empty)* | Default / fallback — always matches |
 
-The engine checks edges in the order they appear in the DOT file (top-to-bottom as drawn). Leave one edge with **no condition** as a catch-all fallback.
-
-**Example setup for a code-review branch:**
-
-```
-Conditional → fix_code   [condition="outcome=failure"]
-Conditional → deploy     [condition="outcome=success"]
-Conditional → exit       (no condition — fallback)
-```
+The engine checks edges in the order they appear in the DOT file (top-to-bottom as drawn). **Leave one edge with no condition** as a catch-all fallback to avoid a dead-end.
 
 ---
 
@@ -173,47 +160,198 @@ Individual nodes can override the stylesheet model using the **LLM Model Overrid
 
 ### Viewing the DOT Source
 
-Click **Source** in the top bar to toggle a panel at the bottom that shows the generated DOT file in real time. Click **Copy** to copy it to the clipboard. The DOT source is what gets sent to the API when you click Validate or Run Pipeline.
+Click **Source** in the top bar to toggle a panel at the bottom that shows the generated DOT file in real time. Click **Copy** to copy it to the clipboard.
 
 ---
 
-## Example: Code Review Pipeline
+## External Skills and Tool Calls
 
-This pipeline asks an LLM to review code, branches on the outcome, either fixes issues or proceeds to deploy, then exits.
+Attractor supports external skills at two levels:
 
-**Steps in the builder:**
+### 1. Shell-based skills (Tool / Shell node)
 
-1. Add: **Start** → **LLM Call** (rename to `review_code`) → **Conditional** (rename to `check_outcome`) → **Exit**
-2. Add another **LLM Call** node, rename it `fix_code`.
-3. Add a **Tool / Shell** node, rename it `deploy`, set command to `./deploy.sh`.
-4. Connect:
-   - `check_outcome` → `fix_code` — set condition `outcome=failure`
-   - `fix_code` → `review_code` — (loop back to re-review after fixing)
-   - `check_outcome` → `deploy` — set condition `outcome=success`
-   - `deploy` → `exit`
-5. Click the `review_code` node and set its **Prompt** to: `Review the following code for bugs and security issues: $goal`
-6. In **Pipeline Settings**, set **Goal** to the code you want reviewed.
-7. Click **Validate** to check the graph, then **Run Pipeline** to execute.
+Any skill that can be invoked from the command line works directly as a **Tool / Shell** node:
 
-The generated DOT will look like:
+| Skill | Command |
+|---|---|
+| Run tests | `npm test` |
+| Lint | `npx eslint src/ --max-warnings 0` |
+| Build | `npm run build` |
+| Playwright browser tests | `npx playwright test` |
+| Lighthouse audit | `npx lighthouse https://localhost:3000 --output json` |
+| Any CLI tool | `your-tool --flag` |
+
+The node captures `stdout`, `stderr`, and `exit_code` into the pipeline context. Use a **Conditional** node after it with `tool.exit_code=0` to branch on success/failure.
+
+### 2. HTTP-based skills (HTTP Request node)
+
+Any skill that exposes an HTTP API works as an **HTTP Request** node. This covers:
+
+- **Browser automation services** — BrowserStack Automate, Sauce Labs, LambdaTest
+- **Custom skill servers** — your own FastAPI or Express microservice
+- **MCP tool servers** — any MCP server with an HTTP transport
+- **Webhooks** — GitHub Actions, Slack, PagerDuty, etc.
+- **External AI services** — vision APIs, document parsers, code scanners
+
+**HTTP node fields:**
+
+| Field | Description |
+|---|---|
+| **URL** | Full endpoint URL. Supports `${variable}` interpolation from pipeline context. |
+| **Method** | GET, POST, PUT, PATCH, or DELETE. |
+| **Request Body** | JSON string to POST. Supports `${variable}` interpolation. |
+| **Headers** | JSON object of headers. Use `{"Authorization": "Bearer ${MY_TOKEN}"}`. |
+
+**Response context keys written after the request:**
+
+| Key | Value |
+|---|---|
+| `http.status_code` | Integer status code (e.g. `200`) |
+| `http.body` | Raw response body text |
+| `http.json` | Parsed JSON object (if response is JSON) |
+| `outcome` | `"success"` for 2xx, `"failure"` otherwise |
+
+**Example: call a Playwright-as-a-service endpoint**
 
 ```dot
-digraph CodeReview {
-    graph [goal="...your code...", model_stylesheet="* { llm_model: claude-sonnet-4-5; }"]
+browser_check [shape=cds, url="https://my-browser-service.internal/run",
+               method="POST",
+               body="{\"url\": \"https://localhost:3000\", \"checks\": [\"title\", \"cta\"]}"]
+```
 
-    start          [shape=Mdiamond]
-    review_code    [shape=box, prompt="Review the following code for bugs: $goal"]
-    check_outcome  [shape=diamond]
-    fix_code       [shape=box, prompt="Fix the issues found in the review."]
-    deploy         [shape=parallelogram, command="./deploy.sh"]
-    exit           [shape=Msquare]
+### 3. Writing a custom Python handler
 
-    start         -> review_code
-    review_code   -> check_outcome
-    check_outcome -> fix_code   [condition="outcome=failure"]
-    check_outcome -> deploy     [condition="outcome=success"]
-    fix_code      -> review_code
-    deploy        -> exit
+For full control, implement the `Handler` interface and register it before calling `run()`:
+
+```python
+from attractor.pipeline.handlers.base import Handler, HandlerInput
+from attractor.pipeline.outcome import Outcome, StageStatus
+from attractor.pipeline.engine import create_default_registry, run
+
+class SlackNotifyHandler(Handler):
+    async def execute(self, input: HandlerInput) -> Outcome:
+        message = input.node.attrs.get("message", "Pipeline reached this stage.")
+        # ... call Slack API ...
+        return Outcome(status=StageStatus.SUCCESS, message="Slack notified")
+
+registry = create_default_registry()
+registry.register("slack", SlackNotifyHandler())
+
+# Now any node with shape=slack in your DOT file will use this handler
+await run(graph, registry=registry)
+```
+
+---
+
+## Example: Build, Lint, and Browser-Validate a Web App
+
+This pipeline builds a frontend app, checks for lint errors, asks an LLM to review the build output, then uses a browser automation step to validate the live page — looping back to fix issues if any check fails.
+
+### Pipeline flow
+
+```
+start
+  ↓
+npm_build         [Tool: npm run build]
+  ↓
+check_build       [Conditional]
+  ├─(outcome=failure)→ fix_build_errors  [LLM: fix the build errors]
+  │                        ↓ back to npm_build
+  └─(outcome=success)→ lint
+  ↓
+lint              [Tool: npx eslint src/ --max-warnings 0]
+  ↓
+check_lint        [Conditional]
+  ├─(outcome=failure)→ fix_lint_errors   [LLM: fix the lint errors]
+  │                        ↓ back to lint
+  └─(outcome=success)→ browser_validate
+  ↓
+browser_validate  [HTTP: POST to Playwright service]
+  ↓
+check_browser     [Conditional]
+  ├─(outcome=failure)→ fix_ui_errors     [LLM: fix the UI issues found]
+  │                        ↓ back to npm_build
+  └─(outcome=success)→ exit
+```
+
+### Steps in the builder
+
+1. Add a **Start** node.
+2. Add a **Tool** node, rename it `npm_build`, set command to `npm run build`.
+3. Add a **Conditional** node, rename it `check_build`.
+4. Add an **LLM Call** node, rename it `fix_build_errors`, set prompt to:
+   `The build failed with this output: ${tool.stdout}. Fix the errors and explain what you changed.`
+5. Add a **Tool** node, rename it `lint`, set command to `npx eslint src/ --max-warnings 0`.
+6. Add a **Conditional** node, rename it `check_lint`.
+7. Add an **LLM Call** node, rename it `fix_lint_errors`, set prompt to:
+   `ESLint found these warnings/errors: ${tool.stdout}. Fix all of them.`
+8. Add an **HTTP Request** node, rename it `browser_validate`. Set:
+   - URL: `https://my-playwright-service.internal/validate`
+   - Method: `POST`
+   - Body: `{"url": "http://localhost:3000", "checks": ["title", "cta_visible", "no_console_errors"]}`
+9. Add a **Conditional** node, rename it `check_browser`.
+10. Add an **LLM Call** node, rename it `fix_ui_errors`, set prompt to:
+    `Browser validation failed: ${http.body}. Fix the UI issues described.`
+11. Add an **Exit** node.
+
+**Connect them:**
+
+| From | To | Condition |
+|---|---|---|
+| `start` | `npm_build` | — |
+| `npm_build` | `check_build` | — |
+| `check_build` | `fix_build_errors` | `outcome=failure` |
+| `fix_build_errors` | `npm_build` | — |
+| `check_build` | `lint` | `outcome=success` |
+| `lint` | `check_lint` | — |
+| `check_lint` | `fix_lint_errors` | `outcome=failure` |
+| `fix_lint_errors` | `lint` | — |
+| `check_lint` | `browser_validate` | `outcome=success` |
+| `browser_validate` | `check_browser` | — |
+| `check_browser` | `fix_ui_errors` | `outcome=failure` |
+| `fix_ui_errors` | `npm_build` | — |
+| `check_browser` | `exit` | `outcome=success` |
+
+12. In **Pipeline Settings**, set **Goal** to describe the app under test.
+13. Click **Validate**, then **Run Pipeline**.
+
+### The generated DOT
+
+```dot
+digraph WebAppPipeline {
+    graph [goal="Build, lint, and browser-validate the frontend app",
+           model_stylesheet="* { llm_model: claude-sonnet-4-5; }"]
+
+    start            [shape=Mdiamond]
+    npm_build        [shape=parallelogram, command="npm run build"]
+    check_build      [shape=diamond]
+    fix_build_errors [shape=box,
+                      prompt="The build failed: ${tool.stdout}. Fix the errors."]
+    lint             [shape=parallelogram, command="npx eslint src/ --max-warnings 0"]
+    check_lint       [shape=diamond]
+    fix_lint_errors  [shape=box,
+                      prompt="ESLint found errors: ${tool.stdout}. Fix all of them."]
+    browser_validate [shape=cds, url="https://my-playwright-service.internal/validate",
+                      method="POST",
+                      body="{\"url\": \"http://localhost:3000\"}"]
+    check_browser    [shape=diamond]
+    fix_ui_errors    [shape=box,
+                      prompt="Browser validation failed: ${http.body}. Fix the UI issues."]
+    exit             [shape=Msquare]
+
+    start            -> npm_build
+    npm_build        -> check_build
+    check_build      -> fix_build_errors  [condition="outcome=failure"]
+    fix_build_errors -> npm_build
+    check_build      -> lint              [condition="outcome=success"]
+    lint             -> check_lint
+    check_lint       -> fix_lint_errors   [condition="outcome=failure"]
+    fix_lint_errors  -> lint
+    check_lint       -> browser_validate  [condition="outcome=success"]
+    browser_validate -> check_browser
+    check_browser    -> fix_ui_errors     [condition="outcome=failure"]
+    fix_ui_errors    -> npm_build
+    check_browser    -> exit              [condition="outcome=success"]
 }
 ```
 

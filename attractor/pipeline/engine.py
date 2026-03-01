@@ -16,6 +16,7 @@ from attractor.pipeline.handlers.codergen import CodergenHandler
 from attractor.pipeline.handlers.conditional import ConditionalHandler
 from attractor.pipeline.handlers.exit import ExitHandler
 from attractor.pipeline.handlers.fan_in import FanInHandler
+from attractor.pipeline.handlers.http import HttpHandler
 from attractor.pipeline.handlers.human import WaitForHumanHandler
 from attractor.pipeline.handlers.manager import ManagerLoopHandler
 from attractor.pipeline.handlers.parallel import ParallelHandler
@@ -48,6 +49,8 @@ def create_default_registry(**kwargs: Any) -> HandlerRegistry:
     )
     registry.register("fan_in", FanInHandler())
     registry.register("tool", ToolHandler())
+    registry.register("http", HttpHandler())
+    registry.register("webhook", HttpHandler())
     registry.register("manager_loop", ManagerLoopHandler())
     return registry
 

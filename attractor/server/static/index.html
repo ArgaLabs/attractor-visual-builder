@@ -35,11 +35,17 @@
   --spacing-2xs: 8px;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
+html {
+  /* Allow horizontal scroll when the viewport is narrower than the minimum layout width */
+  overflow-x: auto;
+}
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg);
   color: var(--text);
   height: 100vh;
+  min-height: 100vh;
+  min-width: 780px; /* left(220) + canvas(min 340) + right(220) */
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -104,12 +110,15 @@ body {
 .main {
   flex: 1;
   display: flex;
-  overflow: hidden;
+  overflow: hidden; /* vertical clip only — horizontal is handled by html scroll */
+  min-width: 0;
 }
 
 /* ---- Left panel ---- */
 .panel-left {
-  width: 264px;
+  width: 220px;
+  min-width: 220px;
+  max-width: 220px;
   background: var(--white);
   border-right: 1px solid var(--border);
   display: flex;
@@ -211,6 +220,7 @@ body {
 /* ---- Canvas ---- */
 .canvas-area {
   flex: 1;
+  min-width: 300px;
   position: relative;
   background: var(--bg);
 }
@@ -278,7 +288,9 @@ body {
 
 /* ---- Right panel ---- */
 .panel-right {
-  width: 300px;
+  width: 260px;
+  min-width: 260px;
+  max-width: 260px;
   background: var(--white);
   border-left: 1px solid var(--border);
   display: flex;
@@ -585,6 +597,14 @@ body {
           </div>
         </div>
 
+        <div class="node-item" onclick="addNode('http')">
+          <div class="node-icon" style="background:#0ea5e9">↗</div>
+          <div class="node-info">
+            <div class="node-name">HTTP Request</div>
+            <div class="node-desc">Calls an external URL (GET/POST/PUT). Use for external skills, webhooks, or browser APIs.</div>
+          </div>
+        </div>
+
         <div class="node-item" onclick="addNode('exit')">
           <div class="node-icon" style="background:#6b7280">X</div>
           <div class="node-info">
@@ -716,22 +736,22 @@ let selectedId = null;
 const NODE_COLORS = {
   start: '#6366f1', codergen: '#3b82f6', conditional: '#eab308',
   human: '#10b981', tool: '#f97316', parallel: '#ec4899',
-  fan_in: '#a855f7', manager: '#8b5cf6', exit: '#6b7280',
+  fan_in: '#a855f7', manager: '#8b5cf6', http: '#0ea5e9', exit: '#6b7280',
 };
 const NODE_SHAPES = {
   start: 'diamond', codergen: 'round-rectangle', conditional: 'diamond',
   human: 'round-rectangle', tool: 'round-rectangle', parallel: 'hexagon',
-  fan_in: 'octagon', manager: 'hexagon', exit: 'round-rectangle',
+  fan_in: 'octagon', manager: 'hexagon', http: 'round-rectangle', exit: 'round-rectangle',
 };
 const NODE_LABELS = {
   start: 'Start', codergen: 'LLM Call', conditional: 'Condition',
   human: 'Human Gate', tool: 'Tool', parallel: 'Parallel',
-  fan_in: 'Fan-In', manager: 'Manager', exit: 'Exit',
+  fan_in: 'Fan-In', manager: 'Manager', http: 'HTTP Request', exit: 'Exit',
 };
 const DOT_SHAPES = {
   start: 'Mdiamond', codergen: 'box', conditional: 'diamond',
   human: 'house', tool: 'parallelogram', parallel: 'component',
-  fan_in: 'tripleoctagon', manager: 'hexagon', exit: 'Msquare',
+  fan_in: 'tripleoctagon', manager: 'hexagon', http: 'cds', exit: 'Msquare',
 };
 
 const cy = cytoscape({
@@ -813,6 +833,7 @@ function addNode(type) {
       color: NODE_COLORS[type],
       shape: NODE_SHAPES[type],
       prompt: '', condition: '', command: '',
+      http_url: '', http_method: 'GET', http_body: '', http_headers: '',
       goal_gate: false, max_retries: 0,
       retry_target: '', timeout: '', llm_model: '',
     },
@@ -942,7 +963,7 @@ function showNodeProps(node) {
       <div class="field">
         <label class="field-label">Node Type</label>
         <select class="field-select" onchange="changeNodeType('${d.id}',this.value)">
-          ${['start','codergen','conditional','human','tool','parallel','fan_in','manager','exit']
+          ${['start','codergen','conditional','human','tool','http','parallel','fan_in','manager','exit']
             .map(t => `<option value="${t}" ${t===d.nodeType?'selected':''}>${NODE_LABELS[t]||t}</option>`).join('')}
         </select>
       </div>
@@ -979,8 +1000,41 @@ function showNodeProps(node) {
       <div class="field">
         <label class="field-label">Shell Command</label>
         <input class="field-input" type="text" value="${esc(d.command||'')}"
-          placeholder="e.g. npm test"
+          placeholder="e.g. npm run build"
           oninput="updateNodeData('${d.id}','command',this.value)">
+      </div>
+    </div>`;
+  }
+
+  if (d.nodeType === 'http') {
+    html += `
+    <div class="prop-group">
+      <div class="info-box">
+        <p><strong>HTTP Request</strong> calls an external URL and stores the response in pipeline context as <code style="font-size:11px;background:#fff;padding:1px 4px;border-radius:3px;">http.status_code</code>, <code style="font-size:11px;background:#fff;padding:1px 4px;border-radius:3px;">http.body</code>, and <code style="font-size:11px;background:#fff;padding:1px 4px;border-radius:3px;">http.json</code>. Use <code style="font-size:11px;background:#fff;padding:1px 4px;border-radius:3px;">\${key}</code> anywhere to interpolate context values.</p>
+      </div>
+      <div class="field">
+        <label class="field-label">URL</label>
+        <input class="field-input" type="text" value="${esc(d.http_url||'')}"
+          placeholder="https://api.example.com/run"
+          oninput="updateNodeData('${d.id}','http_url',this.value)">
+      </div>
+      <div class="field">
+        <label class="field-label">Method</label>
+        <select class="field-select" onchange="updateNodeData('${d.id}','http_method',this.value)">
+          ${['GET','POST','PUT','PATCH','DELETE'].map(m =>
+            `<option value="${m}" ${(d.http_method||'GET')===m?'selected':''}>${m}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">Request Body (JSON)</label>
+        <textarea class="field-textarea mono" oninput="updateNodeData('${d.id}','http_body',this.value)"
+          placeholder='{"prompt": "\${goal}", "task": "validate"}'>${esc(d.http_body||'')}</textarea>
+      </div>
+      <div class="field">
+        <label class="field-label">Headers (JSON)</label>
+        <textarea class="field-textarea mono" oninput="updateNodeData('${d.id}','http_headers',this.value)"
+          placeholder='{"Authorization": "Bearer \${API_TOKEN}"}'>${esc(d.http_headers||'')}</textarea>
       </div>
     </div>`;
   }
@@ -1184,6 +1238,10 @@ function generateDotLocal() {
     if (d.label && d.label !== d.id) a.label = d.label;
     if (d.prompt) a.prompt = d.prompt;
     if (d.command) a.command = d.command;
+    if (d.http_url) a.url = d.http_url;
+    if (d.http_method && d.http_method !== 'GET') a.method = d.http_method;
+    if (d.http_body) a.body = d.http_body;
+    if (d.http_headers) a.headers = d.http_headers;
     if (d.goal_gate) a.goal_gate = 'true';
     if (d.max_retries > 0) a.max_retries = String(d.max_retries);
     if (d.retry_target) a.retry_target = d.retry_target;
