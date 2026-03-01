@@ -951,6 +951,104 @@ body {
   line-height: 1.4;
 }
 
+/* ---- Upload / Data files ---- */
+
+.upload-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px 12px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  user-select: none;
+}
+
+.upload-dropzone:hover,
+.upload-dropzone.drag-over {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.04);
+  color: var(--accent);
+}
+
+.upload-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.upload-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.upload-file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.upload-file-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-file-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.upload-file-meta code {
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  background: var(--bg-primary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+
+.upload-file-remove {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.upload-file-remove:hover {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
 /* ---- Schedule panel ---- */
 .schedule-panel {
   position: fixed;

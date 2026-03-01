@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,9 @@ from attractor.server.scheduler import Scheduler
 from attractor.server.sse import event_stream_generator
 
 STATIC_DIR = Path(__file__).parent / "static"
+UPLOAD_DIR = Path("/tmp/attractor/uploads")
+UPLOAD_MAX_AGE_SECONDS = 24 * 3600  # auto-clean files older than 24 h
+
 manager = PipelineManager()
 scheduler = Scheduler(pipeline_manager=manager)
 
@@ -262,6 +267,74 @@ async def list_pipelines(request: Request) -> JSONResponse:
     return JSONResponse([p.model_dump() for p in pipelines])
 
 
+# --- File upload endpoints ---
+
+
+def _cleanup_old_uploads() -> None:
+    """Remove upload directories older than UPLOAD_MAX_AGE_SECONDS."""
+    if not UPLOAD_DIR.exists():
+        return
+    cutoff = time.time() - UPLOAD_MAX_AGE_SECONDS
+    for entry in UPLOAD_DIR.iterdir():
+        if entry.is_dir():
+            try:
+                mtime = entry.stat().st_mtime
+                if mtime < cutoff:
+                    import shutil
+                    shutil.rmtree(entry, ignore_errors=True)
+            except OSError:
+                pass
+
+
+async def upload_file(request: Request) -> JSONResponse:
+    """POST /upload — accept a multipart file, store in /tmp, return path + context key."""
+    _cleanup_old_uploads()
+
+    try:
+        form = await request.form()
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid form data: {e}"}, status_code=400)
+
+    file_field = form.get("file")
+    if file_field is None:
+        return JSONResponse({"error": "No file field in request"}, status_code=400)
+
+    filename = getattr(file_field, "filename", None) or "upload"
+    # Sanitise filename — keep only safe characters
+    safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ").strip() or "upload"
+
+    file_id = uuid.uuid4().hex[:12]
+    dest_dir = UPLOAD_DIR / file_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / safe_name
+
+    contents: bytes = await file_field.read()
+    dest_path.write_bytes(contents)
+
+    # Derive a sensible context key from the filename stem
+    stem = Path(safe_name).stem.lower().replace(" ", "_").replace("-", "_")
+    context_key = f"{stem}_file"
+
+    return JSONResponse({
+        "file_id": file_id,
+        "filename": safe_name,
+        "path": str(dest_path),
+        "size": len(contents),
+        "context_key": context_key,
+    }, status_code=201)
+
+
+async def delete_upload(request: Request) -> JSONResponse:
+    """DELETE /upload/{file_id} — remove an uploaded file."""
+    file_id = request.path_params["file_id"]
+    target = UPLOAD_DIR / file_id
+    if not target.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    import shutil
+    shutil.rmtree(target, ignore_errors=True)
+    return JSONResponse({"status": "deleted"})
+
+
 # --- Schedule endpoints ---
 
 
@@ -399,6 +472,8 @@ def create_app() -> Starlette:
         ),
         Route("/validate", validate_dot, methods=["POST"]),
         Route("/generate-dot", generate_dot_endpoint, methods=["POST"]),
+        Route("/upload", upload_file, methods=["POST"]),
+        Route("/upload/{file_id}", delete_upload, methods=["DELETE"]),
         Route("/schedules", list_schedules, methods=["GET"]),
         Route("/schedules", create_schedule, methods=["POST"]),
         Route("/schedules/{id}", get_schedule, methods=["GET"]),

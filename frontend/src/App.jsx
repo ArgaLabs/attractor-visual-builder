@@ -23,6 +23,8 @@ export default function App() {
   const [dotSource, setDotSource] = useState('')
   const [dotPreviewOpen, setDotPreviewOpen] = useState(false)
 
+  const [uploadedFiles, setUploadedFiles] = useState([])
+
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
   const [schedulePanelOpen, setSchedulePanelOpen] = useState(false)
   const [schedules, setSchedules] = useState([])
@@ -134,6 +136,37 @@ export default function App() {
     refreshDot(graphName, graphGoal, graphStylesheet)
   }, [graphName, graphGoal, graphStylesheet, refreshDot])
 
+  // ── File upload ──────────────────────────────────────────────────────
+  const handleUploadFile = useCallback(async (file) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const r = await fetch('/upload', { method: 'POST', body: formData })
+      const d = await r.json()
+      if (r.ok) {
+        setUploadedFiles((prev) => [...prev, d])
+        showToast(`Uploaded ${d.filename}`, 'success')
+      } else {
+        showToast(`Upload failed: ${d.error}`, 'error')
+      }
+    } catch (e) {
+      showToast('Upload error: ' + e.message, 'error')
+    }
+  }, [showToast])
+
+  const handleRemoveFile = useCallback(async (fileId) => {
+    try {
+      await fetch(`/upload/${fileId}`, { method: 'DELETE' })
+    } catch (_) {}
+    setUploadedFiles((prev) => prev.filter((f) => f.file_id !== fileId))
+  }, [])
+
+  // Build initial context from uploaded files: { context_key: path, ... }
+  const buildInitialContext = useCallback(() => {
+    if (uploadedFiles.length === 0) return undefined
+    return Object.fromEntries(uploadedFiles.map((f) => [f.context_key, f.path]))
+  }, [uploadedFiles])
+
   const handleLoadPreset = useCallback((preset) => {
     canvasRef.current?.loadPreset(preset)
     setGraphName(preset.graphName)
@@ -192,10 +225,13 @@ export default function App() {
       return
     }
     try {
+      const body = { dot_source: dotSource }
+      const ctx = buildInitialContext()
+      if (ctx) body.context = ctx
       const r = await fetch('/pipelines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dot_source: dotSource }),
+        body: JSON.stringify(body),
       })
       const d = await r.json()
       if (r.ok) {
@@ -207,7 +243,7 @@ export default function App() {
     } catch (e) {
       showToast('Request failed: ' + e.message, 'error')
     }
-  }, [dotSource, showToast])
+  }, [dotSource, showToast, buildInitialContext])
 
   const pollPipeline = useCallback((id) => {
     const check = async () => {
@@ -254,15 +290,18 @@ export default function App() {
         return
       }
       try {
+        const scheduleBody = {
+          dot_source: dotSource,
+          interval_seconds: intervalSeconds,
+          duration_seconds: durationSeconds,
+          carry_context: carryContext,
+        }
+        const ctx = buildInitialContext()
+        if (ctx) scheduleBody.initial_context = ctx
         const r = await fetch('/schedules', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            dot_source: dotSource,
-            interval_seconds: intervalSeconds,
-            duration_seconds: durationSeconds,
-            carry_context: carryContext,
-          }),
+          body: JSON.stringify(scheduleBody),
         })
         const d = await r.json()
         if (r.ok) {
@@ -277,7 +316,7 @@ export default function App() {
         showToast('Request failed: ' + e.message, 'error')
       }
     },
-    [dotSource, showToast, fetchSchedules]
+    [dotSource, showToast, fetchSchedules, buildInitialContext]
   )
 
   const handleCancelSchedule = useCallback(
@@ -319,6 +358,9 @@ export default function App() {
           onGraphGoalChange={setGraphGoal}
           graphStylesheet={graphStylesheet}
           onGraphStylesheetChange={setGraphStylesheet}
+          uploadedFiles={uploadedFiles}
+          onUploadFile={handleUploadFile}
+          onRemoveFile={handleRemoveFile}
         />
 
         <Canvas
