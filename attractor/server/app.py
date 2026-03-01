@@ -18,13 +18,16 @@ from attractor.server.dot_generator import generate_dot
 from attractor.server.models import (
     AnswerRequest,
     CreatePipelineRequest,
+    CreateScheduleRequest,
     ValidateRequest,
 )
 from attractor.server.pipeline_manager import PipelineManager
+from attractor.server.scheduler import Scheduler
 from attractor.server.sse import event_stream_generator
 
 STATIC_DIR = Path(__file__).parent / "static"
 manager = PipelineManager()
+scheduler = Scheduler(pipeline_manager=manager)
 
 
 # --- Pipeline CRUD endpoints ---
@@ -259,6 +262,53 @@ async def list_pipelines(request: Request) -> JSONResponse:
     return JSONResponse([p.model_dump() for p in pipelines])
 
 
+# --- Schedule endpoints ---
+
+
+async def create_schedule(request: Request) -> JSONResponse:
+    """POST /schedules - Create a recurring pipeline schedule."""
+    body = await request.json()
+    try:
+        req = CreateScheduleRequest(**body)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+
+    sched = await scheduler.create(
+        dot_source=req.dot_source,
+        interval_seconds=req.interval_seconds,
+        duration_seconds=req.duration_seconds,
+        carry_context=req.carry_context,
+        initial_context=req.context,
+    )
+    return JSONResponse(sched.info(), status_code=201)
+
+
+async def list_schedules(request: Request) -> JSONResponse:
+    """GET /schedules - List all schedules."""
+    return JSONResponse(scheduler.list_all())
+
+
+async def get_schedule(request: Request) -> JSONResponse:
+    """GET /schedules/{id} - Get a single schedule."""
+    sched = scheduler.get(request.path_params["id"])
+    if not sched:
+        return JSONResponse({"error": "Schedule not found"}, status_code=404)
+    return JSONResponse(sched.info())
+
+
+async def cancel_schedule(request: Request) -> JSONResponse:
+    """DELETE /schedules/{id} - Cancel a schedule."""
+    ok = await scheduler.cancel(request.path_params["id"])
+    if not ok:
+        sched = scheduler.get(request.path_params["id"])
+        if not sched:
+            return JSONResponse({"error": "Schedule not found"}, status_code=404)
+        return JSONResponse(
+            {"error": f"Schedule is already {sched.status.value}"}, status_code=409
+        )
+    return JSONResponse({"status": "cancelled"})
+
+
 # --- Visual builder ---
 
 
@@ -349,6 +399,10 @@ def create_app() -> Starlette:
         ),
         Route("/validate", validate_dot, methods=["POST"]),
         Route("/generate-dot", generate_dot_endpoint, methods=["POST"]),
+        Route("/schedules", list_schedules, methods=["GET"]),
+        Route("/schedules", create_schedule, methods=["POST"]),
+        Route("/schedules/{id}", get_schedule, methods=["GET"]),
+        Route("/schedules/{id}", cancel_schedule, methods=["DELETE"]),
         # Catch-all for Vite build static assets (e.g. /assets/index-*.js)
         Route("/{path:path}", serve_static, methods=["GET"]),
     ]

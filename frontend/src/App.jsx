@@ -5,6 +5,8 @@ import Canvas from './components/Canvas.jsx'
 import RightPanel from './components/RightPanel.jsx'
 import DotPreview from './components/DotPreview.jsx'
 import Toast from './components/Toast.jsx'
+import ScheduleModal from './components/ScheduleModal.jsx'
+import SchedulePanel from './components/SchedulePanel.jsx'
 import { generateDot } from './dotGenerator.js'
 
 export default function App() {
@@ -20,6 +22,11 @@ export default function App() {
 
   const [dotSource, setDotSource] = useState('')
   const [dotPreviewOpen, setDotPreviewOpen] = useState(false)
+
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
+  const [schedulePanelOpen, setSchedulePanelOpen] = useState(false)
+  const [schedules, setSchedules] = useState([])
+  const schedulePollRef = useRef(null)
 
   const [toast, setToast] = useState(null)
 
@@ -215,6 +222,79 @@ export default function App() {
     setTimeout(check, 500)
   }, [showToast])
 
+  // ── Schedule polling ──────────────────────────────────────────────────
+  const fetchSchedules = useCallback(async () => {
+    try {
+      const r = await fetch('/schedules')
+      if (r.ok) setSchedules(await r.json())
+    } catch (_) {}
+  }, [])
+
+  // Start/stop polling based on whether any schedule is active
+  useEffect(() => {
+    const hasActive = schedules.some((s) => s.status === 'active')
+    if (hasActive && !schedulePollRef.current) {
+      schedulePollRef.current = setInterval(fetchSchedules, 5000)
+    } else if (!hasActive && schedulePollRef.current) {
+      clearInterval(schedulePollRef.current)
+      schedulePollRef.current = null
+    }
+    return () => {
+      if (schedulePollRef.current) {
+        clearInterval(schedulePollRef.current)
+        schedulePollRef.current = null
+      }
+    }
+  }, [schedules, fetchSchedules])
+
+  const handleCreateSchedule = useCallback(
+    async ({ intervalSeconds, durationSeconds, carryContext }) => {
+      if (!dotSource.includes('->')) {
+        showToast('Add nodes and connect them first', 'error')
+        return
+      }
+      try {
+        const r = await fetch('/schedules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dot_source: dotSource,
+            interval_seconds: intervalSeconds,
+            duration_seconds: durationSeconds,
+            carry_context: carryContext,
+          }),
+        })
+        const d = await r.json()
+        if (r.ok) {
+          showToast('Schedule created', 'success')
+          setScheduleModalOpen(false)
+          setSchedulePanelOpen(true)
+          await fetchSchedules()
+        } else {
+          showToast(`Error: ${d.error}`, 'error')
+        }
+      } catch (e) {
+        showToast('Request failed: ' + e.message, 'error')
+      }
+    },
+    [dotSource, showToast, fetchSchedules]
+  )
+
+  const handleCancelSchedule = useCallback(
+    async (id) => {
+      try {
+        await fetch(`/schedules/${id}`, { method: 'DELETE' })
+        showToast('Schedule cancelled', 'success')
+        await fetchSchedules()
+      } catch (e) {
+        showToast('Request failed: ' + e.message, 'error')
+      }
+    },
+    [showToast, fetchSchedules]
+  )
+
+  const activeScheduleCount = schedules.filter((s) => s.status === 'active').length
+
   return (
     <div className="app">
       <TopBar
@@ -222,6 +302,9 @@ export default function App() {
         onToggleDot={() => setDotPreviewOpen((p) => !p)}
         onValidate={handleValidate}
         onRun={handleRun}
+        onOpenSchedule={() => setScheduleModalOpen(true)}
+        activeScheduleCount={activeScheduleCount}
+        onToggleSchedulePanel={() => setSchedulePanelOpen((p) => !p)}
       />
 
       <div className="main">
@@ -264,6 +347,21 @@ export default function App() {
           onCopy={() =>
             navigator.clipboard.writeText(dotSource).then(() => showToast('Copied to clipboard', 'success'))
           }
+        />
+      )}
+
+      {schedulePanelOpen && schedules.length > 0 && (
+        <SchedulePanel
+          schedules={schedules}
+          onCancel={handleCancelSchedule}
+          onClose={() => setSchedulePanelOpen(false)}
+        />
+      )}
+
+      {scheduleModalOpen && (
+        <ScheduleModal
+          onClose={() => setScheduleModalOpen(false)}
+          onCreate={handleCreateSchedule}
         />
       )}
 

@@ -68,3 +68,35 @@ class GenerateDotRequest(BaseModel):
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     graph_attrs: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Scheduler models ─────────────────────────────────────────────────────────
+
+
+class ScheduleStatus(str, enum.Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class CreateScheduleRequest(BaseModel):
+    dot_source: str
+    interval_seconds: int = Field(..., ge=30, description="Minimum 30 seconds between runs")
+    duration_seconds: int = Field(
+        ..., ge=60, le=7 * 24 * 3600, description="Total lifetime (max 7 days)"
+    )
+    carry_context: bool = False
+    context: dict[str, Any] | None = None
+
+
+class ScheduleInfo(BaseModel):
+    id: str
+    status: ScheduleStatus
+    interval_seconds: int
+    duration_seconds: int
+    carry_context: bool
+    created_at: float
+    expires_at: float
+    run_count: int
+    run_ids: list[str] = Field(default_factory=list)
+    next_run_at: float | None = None
