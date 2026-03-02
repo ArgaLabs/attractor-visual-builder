@@ -1,10 +1,35 @@
 """Entry point: python -m attractor.server"""
 
 import argparse
+import os
+from pathlib import Path
 
-import uvicorn
+_ROOT = Path(__file__).parent.parent.parent
 
-from attractor.server.app import create_app
+
+def _load_dotenv() -> None:
+    """Load .env from repo root into os.environ without requiring python-dotenv."""
+    env_path = _ROOT / ".env"
+    if not env_path.exists():
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+# Load .env BEFORE importing app so _make_backend() sees the keys
+_load_dotenv()
+
+import uvicorn  # noqa: E402
+
+from attractor.server.app import create_app  # noqa: E402
 
 
 def main() -> None:

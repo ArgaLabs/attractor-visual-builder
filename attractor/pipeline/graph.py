@@ -51,7 +51,15 @@ class Node(BaseModel):
 
     @property
     def type(self) -> str:
-        return str(self.attrs.get("shape", self.attrs.get("type", "codergen")))
+        raw = str(self.attrs.get("shape", self.attrs.get("type", "codergen")))
+        # Normalize Graphviz visual shapes to canonical handler type names
+        _SHAPE_NORM = {
+            "Mdiamond": "start",
+            "Msquare": "exit",
+            "doublecircle": "exit",
+            "point": "start",
+        }
+        return _SHAPE_NORM.get(raw, raw)
 
     @property
     def label(self) -> str:
@@ -157,13 +165,17 @@ class Graph(BaseModel):
         return [e for e in self.edges if e.target == node_id]
 
     def start_nodes(self) -> list[Node]:
-        return [n for n in self.nodes.values() if n.type in ("start", "point") and n.id == "start"]
+        return [
+            n
+            for n in self.nodes.values()
+            if n.type in ("start", "point") or n.id == "start"
+        ]
 
     def exit_nodes(self) -> list[Node]:
         return [
             n
             for n in self.nodes.values()
-            if n.type in ("exit", "doublecircle") and n.id in ("exit", "end")
+            if n.type in ("exit", "doublecircle") or n.id in ("exit", "end")
         ]
 
     def all_node_ids(self) -> set[str]:

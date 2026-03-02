@@ -67,23 +67,24 @@ export const LLM_MODELS = [
   {
     group: 'Anthropic',
     options: [
-      { id: 'claude-opus-4-6',   label: 'Claude Opus 4.6' },
-      { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+      { id: 'claude-opus-4-5',   label: 'Claude Opus 4.5' },
+      { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5 (Default)' },
+      { id: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku (Fast)' },
     ],
   },
   {
     group: 'OpenAI',
     options: [
-      { id: 'gpt-5.2',       label: 'GPT-5.2' },
-      { id: 'gpt-5.2-mini',  label: 'GPT-5.2 Mini' },
-      { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex' },
+      { id: 'gpt-4o',       label: 'GPT-4o' },
+      { id: 'gpt-4o-mini',  label: 'GPT-4o Mini' },
+      { id: 'o3-mini',      label: 'o3 Mini' },
     ],
   },
   {
     group: 'Google',
     options: [
-      { id: 'gemini-3-pro-preview',   label: 'Gemini 3 Pro (Preview)' },
-      { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
+      { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+      { id: 'gemini-1.5-pro',   label: 'Gemini 1.5 Pro' },
     ],
   },
 ]

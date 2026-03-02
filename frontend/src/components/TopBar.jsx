@@ -6,6 +6,9 @@ export default function TopBar({
   onOpenSchedule,
   activeScheduleCount,
   onToggleSchedulePanel,
+  hasResult,
+  onViewResult,
+  runStatus,
 }) {
   return (
     <div className="topbar">
@@ -37,6 +40,30 @@ export default function TopBar({
             <span className="schedule-badge">{activeScheduleCount}</span>
           )}
         </button>
+
+        {/* View Results button — visible while running or once results exist */}
+        {(runStatus === 'running' || hasResult) && (
+          <button
+            className={`btn btn-results${runStatus === 'running' ? ' btn-results-running' : ''}`}
+            onClick={onViewResult}
+            title={runStatus === 'running' ? 'Pipeline is running…' : 'View last pipeline result'}
+          >
+            {runStatus === 'running' ? (
+              <>
+                <span className="run-spinner" />
+                Running…
+              </>
+            ) : (
+              <>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+                View Results
+              </>
+            )}
+          </button>
+        )}
 
         <button className="btn btn-primary" onClick={onRun}>Run Pipeline</button>
       </div>

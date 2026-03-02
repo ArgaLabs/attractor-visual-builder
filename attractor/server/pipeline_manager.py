@@ -74,9 +74,10 @@ class ManagedPipeline:
 
 
 class PipelineManager:
-    def __init__(self, max_pipelines: int = 100):
+    def __init__(self, max_pipelines: int = 100, backend: Any = None):
         self._pipelines: dict[str, ManagedPipeline] = {}
         self._max_pipelines = max_pipelines
+        self._backend = backend
 
     def get(self, pipeline_id: str) -> ManagedPipeline | None:
         return self._pipelines.get(pipeline_id)
@@ -103,8 +104,9 @@ class PipelineManager:
         self._pipelines[pipeline_id] = managed
 
         managed.status = PipelineStatus.RUNNING
+        run_kwargs = {"backend": self._backend, **kwargs}
         managed._task = asyncio.create_task(
-            self._run_pipeline(managed, **kwargs)
+            self._run_pipeline(managed, **run_kwargs)
         )
 
         return managed
@@ -131,7 +133,12 @@ class PipelineManager:
                 managed.status = PipelineStatus.COMPLETED
             else:
                 managed.status = PipelineStatus.FAILED
-                managed.error = "Pipeline execution failed"
+                # Extract first failure message from node outcomes
+                failure_msg = next(
+                    (o.message for o in result.node_outcomes.values() if not o.is_success),
+                    "Pipeline execution failed",
+                )
+                managed.error = failure_msg
 
         except asyncio.CancelledError:
             managed.status = PipelineStatus.CANCELLED

@@ -35,13 +35,12 @@ def create_default_registry(**kwargs: Any) -> HandlerRegistry:
     _codergen = CodergenHandler(backend=kwargs.get("backend"), mcp_session=kwargs.get("mcp_session"))
     registry.register("codergen", _codergen)
     registry.register("box", _codergen)
-    registry.register(
-        "wait.human",
-        WaitForHumanHandler(
-            interviewer=kwargs.get("interviewer"),
-            default_choice=kwargs.get("default_choice"),
-        ),
+    _human = WaitForHumanHandler(
+        interviewer=kwargs.get("interviewer"),
+        default_choice=kwargs.get("default_choice"),
     )
+    registry.register("wait.human", _human)
+    registry.register("house", _human)  # DOT shape for human gate in visual builder
     registry.register("conditional", ConditionalHandler())
     registry.register("diamond", ConditionalHandler())
     registry.register("parallel", ParallelHandler(branch_executor=kwargs.get("branch_executor")))

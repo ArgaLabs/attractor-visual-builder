@@ -757,6 +757,40 @@ body {
   position: relative;
 }
 
+/* View Results / Running button */
+.btn-results {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.btn-results:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-results-running {
+  color: #888;
+  border-color: #ccc;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Spinning dot for "Running…" */
+.run-spinner {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: runPulse 1s ease-in-out infinite;
+}
+@keyframes runPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
 .schedule-badge {
   display: inline-flex;
   align-items: center;

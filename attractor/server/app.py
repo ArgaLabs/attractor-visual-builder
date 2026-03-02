@@ -31,7 +31,69 @@ STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_DIR = Path("/tmp/attractor/uploads")
 UPLOAD_MAX_AGE_SECONDS = 24 * 3600  # auto-clean files older than 24 h
 
-manager = PipelineManager()
+
+def _make_backend() -> Any:
+    """Build a real LLM backend from env vars, or None for simulation mode."""
+    import os
+
+    from attractor.llm.client import Client
+    from attractor.llm.models import ContentPart, Message, Request, Role
+    from attractor.pipeline.handlers.codergen import CodergenBackend
+    from attractor.pipeline.outcome import Outcome, StageStatus
+
+    class LLMCodergenBackend(CodergenBackend):
+        def __init__(self, client: Client, default_model: str, default_provider: str) -> None:
+            self._client = client
+            self._default_model = default_model
+            self._default_provider = default_provider
+
+        async def run(
+            self,
+            node_id: str,
+            prompt: str,
+            context: dict[str, Any],
+            tools: Any = None,
+        ) -> "Outcome | str":
+            # Allow per-node model override via context key "llm_model"
+            model = context.get("llm_model") or self._default_model
+            llm_req = Request(
+                model=model,
+                provider=self._default_provider,
+                messages=[
+                    Message(
+                        role=Role.USER,
+                        content=[ContentPart.text_part(prompt)],
+                    )
+                ],
+                max_tokens=4096,
+            )
+            try:
+                resp = await self._client.complete(llm_req)
+                return resp.text
+            except Exception as exc:
+                return Outcome(
+                    status=StageStatus.FAIL,
+                    message=f"LLM call failed: {exc}",
+                )
+
+    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+
+    if not has_anthropic and not has_openai:
+        return None  # simulation mode
+
+    client = Client.from_env()
+    if has_anthropic:
+        default_model = "claude-sonnet-4-5"
+        default_provider = "anthropic"
+    else:
+        default_model = "gpt-4o"
+        default_provider = "openai"
+    return LLMCodergenBackend(client, default_model, default_provider)
+
+
+_backend = _make_backend()
+manager = PipelineManager(backend=_backend)
 scheduler = Scheduler(pipeline_manager=manager)
 
 

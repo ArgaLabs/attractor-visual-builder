@@ -26,6 +26,8 @@ export default function App() {
 
   const [uploadedFiles, setUploadedFiles] = useState([])
   const [pipelineResult, setPipelineResult] = useState(null)
+  const [runStatus, setRunStatus] = useState(null) // 'running' | 'completed' | 'failed' | null
+  const [showResult, setShowResult] = useState(false)
 
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
   const [schedulePanelOpen, setSchedulePanelOpen] = useState(false)
@@ -208,8 +210,23 @@ export default function App() {
     canvasRef.current?.selectElement(edgeId)
   }, [])
 
+  const getCurrentDot = useCallback(() => {
+    const { nodes, edges } = canvasRef.current?.getGraphData() ?? { nodes: [], edges: [] }
+    if (nodes?.length && edges?.length) {
+      return generateDot({
+        name: graphName,
+        goal: graphGoal,
+        stylesheet: graphStylesheet,
+        nodes,
+        edges,
+      })
+    }
+    return dotSource
+  }, [graphName, graphGoal, graphStylesheet, dotSource])
+
   const handleValidate = useCallback(async () => {
-    if (!dotSource.includes('->')) {
+    const toValidate = getCurrentDot()
+    if (!toValidate.includes('->')) {
       showToast('Add nodes and connect them first', 'error')
       return
     }
@@ -217,7 +234,7 @@ export default function App() {
       const r = await fetch('/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dot_source: dotSource }),
+        body: JSON.stringify({ dot_source: toValidate }),
       })
       const d = await parseResponse(r)
       if (d._empty) {
@@ -238,15 +255,16 @@ export default function App() {
     } catch (e) {
       showToast('Network error: ' + e.message, 'error')
     }
-  }, [dotSource, showToast, parseResponse])
+  }, [getCurrentDot, showToast, parseResponse])
 
   const handleRun = useCallback(async () => {
-    if (!dotSource.includes('->')) {
+    const runDot = getCurrentDot()
+    if (!runDot.includes('->')) {
       showToast('Add nodes and connect them first', 'error')
       return
     }
     try {
-      const body = { dot_source: dotSource }
+      const body = { dot_source: runDot }
       const ctx = buildInitialContext()
       if (ctx) body.context = ctx
       const r = await fetch('/pipelines', {
@@ -264,32 +282,46 @@ export default function App() {
         return
       }
       showToast(`Pipeline started: ${d.id}`, 'success')
+      setRunStatus('running')
+      setPipelineResult(null)
+      setShowResult(false)
       pollPipeline(d.id)
     } catch (e) {
       showToast('Network error: ' + e.message, 'error')
     }
-  }, [dotSource, showToast, buildInitialContext, parseResponse])
+  }, [getCurrentDot, showToast, buildInitialContext, parseResponse])
 
   const pollPipeline = useCallback((id) => {
     const check = async () => {
       try {
         const r = await fetch(`/pipelines/${id}`)
         const d = await parseResponse(r)
-        if (d.status === 'completed' || d.status === 'failed') {
-          const label = d.status === 'completed' ? 'Pipeline completed' : `Pipeline failed: ${d.error || ''}`
-          showToast(label, d.status === 'completed' ? 'success' : 'error')
-          // Fetch the full result log and show the output panel
+        const status = d?.status
+
+        if (status === 'completed' || status === 'failed') {
+          setRunStatus(status)
+          const label = status === 'completed' ? 'Pipeline completed — click View Results' : `Pipeline failed: ${d.error || ''}`
+          showToast(label, status === 'completed' ? 'success' : 'error')
+          // Fetch the full result log
           try {
             const lr = await fetch(`/pipelines/${id}/log`)
             const log = await parseResponse(lr)
-            if (!log._empty && !log._raw) setPipelineResult(log)
+            if (log && !log._empty && !log._raw) {
+              setPipelineResult(log)
+              setShowResult(true)  // auto-open on first completion
+            }
           } catch (_) {}
-        } else if (d.status === 'running') {
-          setTimeout(check, 1200)
+        } else if (status === 'running' || status === 'pending') {
+          setTimeout(check, 1500)
+        } else {
+          // unknown status or parse failure — keep polling a few more times
+          setTimeout(check, 2000)
         }
-      } catch (_) {}
+      } catch (_) {
+        setTimeout(check, 2000)
+      }
     }
-    setTimeout(check, 800)
+    setTimeout(check, 1000)
   }, [showToast, parseResponse])
 
   // ── Schedule polling ──────────────────────────────────────────────────
@@ -319,13 +351,14 @@ export default function App() {
 
   const handleCreateSchedule = useCallback(
     async ({ intervalSeconds, durationSeconds, carryContext }) => {
-      if (!dotSource.includes('->')) {
+      const scheduleDot = getCurrentDot()
+      if (!scheduleDot.includes('->')) {
         showToast('Add nodes and connect them first', 'error')
         return
       }
       try {
         const scheduleBody = {
-          dot_source: dotSource,
+          dot_source: scheduleDot,
           interval_seconds: intervalSeconds,
           duration_seconds: durationSeconds,
           carry_context: carryContext,
@@ -350,7 +383,7 @@ export default function App() {
         showToast('Network error: ' + e.message, 'error')
       }
     },
-    [dotSource, showToast, fetchSchedules, buildInitialContext, parseResponse]
+    [getCurrentDot, showToast, fetchSchedules, buildInitialContext, parseResponse]
   )
 
   const handleCancelSchedule = useCallback(
@@ -378,6 +411,9 @@ export default function App() {
         onOpenSchedule={() => setScheduleModalOpen(true)}
         activeScheduleCount={activeScheduleCount}
         onToggleSchedulePanel={() => setSchedulePanelOpen((p) => !p)}
+        runStatus={runStatus}
+        hasResult={!!pipelineResult}
+        onViewResult={() => setShowResult(true)}
       />
 
       <div className="main">
@@ -443,10 +479,10 @@ export default function App() {
 
       <Toast message={toast?.message} type={toast?.type} />
 
-      {pipelineResult && (
+      {showResult && pipelineResult && (
         <PipelineOutput
           result={pipelineResult}
-          onClose={() => setPipelineResult(null)}
+          onClose={() => setShowResult(false)}
         />
       )}
     </div>
