@@ -1,4 +1,4 @@
-# Attractor implementation by Arga Labs
+# Attractor implementation & Visual Builder by Arga Labs
 An implementation of the nlspec in https://github.com/strongdm/attractor by StrongDM
 
 A DOT-based pipeline runner for multi-stage AI workflows, with a visual browser-based builder for designing pipelines without writing any code.
