@@ -3,6 +3,8 @@ An implementation of the nlspec in https://github.com/strongdm/attractor by Stro
 
 A DOT-based pipeline runner for multi-stage AI workflows, with a visual browser-based builder for designing pipelines without writing any code.
 
+Walkthrough here: https://www.youtube.com/watch?v=l_FyHaCm2jk
+
 ---
 
 ## Contents
